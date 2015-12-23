@@ -1,0 +1,2 @@
+10001:{"CFBundleIdentifier":"com.haha.haha"}
+10002:{"CFBundleIdentifier":"com.haha.heihei"}

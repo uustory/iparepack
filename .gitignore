@@ -1,0 +1,7 @@
+build
+dist
+workdir
+output
+*.ipa
+__pycache__
+*.spec
