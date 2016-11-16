@@ -8,7 +8,29 @@ import shutil
 import sys
 import plistlib
 import json
+import subprocess
+import glob
+import OpenSSL
+
 from ipa_processor import IpaProcessor
+
+
+def load_mobileprovision(provisionfile):
+    with open(os.devnull, 'w') as devnull:
+        plistcontent = subprocess.check_output("openssl smime -in \"%s\" -inform der -verify"%provisionfile, stderr=devnull, shell=True)
+        return plistlib.loads(plistcontent)
+
+def get_mobileprovision(name):
+    for provisionfile in glob.glob(os.path.expanduser("~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision")):
+        plist = load_mobileprovision(provisionfile)
+        if name == plist.get('Name'):
+            return (plist,provisionfile)
+
+    return (None,None)
+
+def get_cert_cn(certBytes):
+    cert = OpenSSL.crypto.load_certificate(OpenSSL.crypto.FILETYPE_ASN1, certBytes)
+    return cert.get_subject().commonName
 
 def extractIpa(ipafile, workdir):
     zf = zipfile.ZipFile(ipafile, 'r')
@@ -27,12 +49,9 @@ def zipdir(path, ziph):
             relpath = os.path.relpath(filepath, path)
             ziph.write(filepath, relpath, zipfile.ZIP_DEFLATED)
 
-def packIpa(workdir, ipafile):
-    zf = zipfile.ZipFile(ipafile, 'w')
-    zipdir(workdir, zf)
-    zf.close()
 
 def repack(ipafile, appdir, outputdir, channelConfig, channelConfigDir):
+    outputdir = os.path.abspath(outputdir)
     processor = IpaProcessor(appdir, channelConfig, channelConfigDir)
     processor.process()
     
@@ -42,11 +61,42 @@ def repack(ipafile, appdir, outputdir, channelConfig, channelConfigDir):
     else:
         output_ipafile = os.path.basename(ipafile)
 
-    if os.path.isfile("/usr/bin/codesign") and 'sign' in channelConfig:
-        os.system("/usr/bin/codesign -vvvv -f -s \"%s\" --preserve-metadata=identifier,entitlements,resource-rules \"%s\""%(channelConfig['sign'], appdir))
+    print(channelConfig)
+    if os.path.isfile("/usr/bin/codesign"):
 
-    print("packing %s..."%output_ipafile)
-    packIpa(workdir, os.path.join(outputdir, output_ipafile))
+        sign = None
+        if 'provision' in channelConfig:
+            provision = channelConfig['provision']
+
+            if provision.endswith('.mobileprovision'):
+                provisionfile = os.path.join(channelConfigDir, provision)
+                shutil.copy2(provisionfile, os.path.join(appdir, "embedded.mobileprovision"))
+            else:
+                (provisionInfo,provisionfile) = get_mobileprovision(provision)
+                if not provisionInfo:
+                    print("cant find provision: \"%s\""%provision)
+                    exit(-1)
+
+                shutil.copy2(provisionfile, os.path.join(appdir, "embedded.mobileprovision"))
+                sign = get_cert_cn(provisionInfo['DeveloperCertificates'][0])
+
+        if not sign:
+            provisionInfo = load_mobileprovision(os.path.join(appdir, "embedded.mobileprovision"))
+            sign = get_cert_cn(provisionInfo['DeveloperCertificates'][0])
+
+        if sign:
+            print("\n\n\nPackageApplication \n \n");
+            retValue = os.system("/usr/bin/codesign -vvvv -f -s \"%s\" --preserve-metadata=identifier,entitlements,resource-rules \"%s\""%(sign, appdir))
+            if retValue != 0:
+                exit(1)
+
+    print("\n\npacking %s..."%os.path.join(outputdir, output_ipafile))
+    if os.path.isfile("/usr/bin/xcrun"):
+        os.system("/usr/bin/xcrun -sdk iphoneos PackageApplication -v \"%s\" -o \"%s\""%(appdir, os.path.join(outputdir, output_ipafile)))
+    else:
+        zf = zipfile.ZipFile(os.path.join(outputdir, output_ipafile), 'w')
+        zipdir(workdir, zf)
+        zf.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(sys.argv[0])
