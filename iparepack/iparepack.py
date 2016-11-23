@@ -14,7 +14,6 @@ import OpenSSL
 
 from ipa_processor import IpaProcessor
 
-
 def load_mobileprovision(provisionfile):
     with open(os.devnull, 'w') as devnull:
         plistcontent = subprocess.check_output("openssl smime -in \"%s\" -inform der -verify"%provisionfile, stderr=devnull, shell=True)
@@ -84,11 +83,13 @@ def repack(ipafile, appdir, outputdir, channelConfig, channelConfigDir):
             provisionInfo = load_mobileprovision(os.path.join(appdir, "embedded.mobileprovision"))
             sign = get_cert_cn(provisionInfo['DeveloperCertificates'][0])
 
-        if sign:
-            print("\n\n\nPackageApplication \n \n");
-            retValue = os.system("/usr/bin/codesign -vvvv -f -s \"%s\" --preserve-metadata=identifier,entitlements,resource-rules \"%s\""%(sign, appdir))
-            if retValue != 0:
-                exit(1)
+        entitlements = provisionInfo["Entitlements"]
+        plistlib.writePlist(entitlements, os.path.join(appdir, "../entitlements.plist"))
+
+        print("\n\ncodesign \n \n");
+        retValue = os.system("/usr/bin/codesign -vvvv -f -s \"%s\" --entitlements %s  --preserve-metadata=identifier,resource-rules \"%s\""%(sign, os.path.join(appdir, "../entitlements.plist"), appdir))
+        if retValue != 0:
+            exit(1)
 
     print("\n\npacking %s..."%os.path.join(outputdir, output_ipafile))
     if os.path.isfile("/usr/bin/xcrun"):
